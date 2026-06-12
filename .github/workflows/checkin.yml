@@ -3,24 +3,106 @@ name: 原神自动签到
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *'
+    # UTC 16点 = 北京时间 0点 每日定时
+    - cron: '0 16 * * *'
 
 jobs:
   checkin:
     runs-on: ubuntu-latest
     steps:
-      - name: 检出代码
+      # 补充检出代码（规范必备）
+      - name: 检出仓库代码
         uses: actions/checkout@v4
 
-      - name: 配置 Python
+      - name: 配置 Python 3.10
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
       - name: 安装依赖
-        run: pip install requests
+        run: pip install requests -q
 
-      - name: 执行签到
+      - name: 执行多账号签到
         env:
           MIHOYO_COOKIE: ${{ secrets.MIHOYO_COOKIE }}
-        run: python .github/scripts/checkin.py
+        shell: bash
+        run: |
+          python - << 'EOF'
+          import os, sys, re, time, random, hashlib, requests, uuid
+
+          # 关闭 urllib3 证书警告
+          requests.packages.urllib3.disable_warnings()
+
+          COOKIE_ENV = os.environ.get("MIHOYO_COOKIE")
+          if not COOKIE_ENV:
+              print("❌ 未配置 MIHOYO_COOKIE")
+              sys.exit(1)
+
+          # 按行分割多账号Cookie，空行过滤
+          cookies_list = [c.strip() for c in COOKIE_ENV.strip().splitlines() if c.strip()]
+          print(f"📋 共检测到 {len(cookies_list)} 个账号\n")
+
+          ACT_ID = "e202009291139501"
+          SALT = "6s25p5ox5y"
+
+          # 生成 DS 签名
+          def get_ds():
+              t = int(time.time())
+              r = ''.join(random.choices("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", k=6))
+              sign_content = f"salt={SALT}&t={t}&r={r}&b={{}}&q="
+              sign = hashlib.md5(sign_content.encode()).hexdigest()
+              return f"{t},{r},{sign}"
+
+          # 单账号签到逻辑
+          def sign_in(cookie, account_index):
+              # 兼容 ltuid / ltuid_v2
+              ltuid_match = re.search(r'ltuid(_v2)?=(\d+)', cookie)
+              if not ltuid_match:
+                  print(f"❌ 账号 {account_index} Cookie 缺少 ltuid，跳过")
+                  return
+              uid = ltuid_match.group(2)
+
+              # 随机设备ID，降低风控
+              device_id = str(uuid.uuid4())
+              headers = {
+                  "Cookie": cookie,
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                  "x-rpc-app_version": "2.35.1",
+                  "x-rpc-client_type": "5",
+                  "x-rpc-sys_version": "Windows 10",
+                  "x-rpc-device_id": device_id,
+                  "x-rpc-signgame": "hk4e",
+                  "x-rpc-sign": get_ds(),
+                  "Referer": "https://act.mihoyo.com/",
+                  "Origin": "https://act.mihoyo.com",
+                  "Content-Type": "application/json"
+              }
+
+              url = "https://api-takumi.mihoyo.com/event/bbs_sign_reward/sign"
+              data = {"act_id": ACT_ID, "lang": "zh-cn", "region": "cn_gf01", "uid": uid}
+
+              try:
+                  resp = requests.post(url, headers=headers, json=data, timeout=10, verify=False)
+                  result = resp.json()
+                  code = result.get("retcode")
+                  msg = result.get("message", "")
+
+                  if code == 0:
+                      print(f"✅ 账号 {account_index} (UID {uid}) 签到成功：{msg}")
+                  elif code == -5003:
+                      print(f"ℹ️ 账号 {account_index} (UID {uid}) 今日已签到过")
+                  elif code == -100:
+                      print(f"❌ 账号 {account_index} (UID {uid}) Cookie 已失效，请重新获取")
+                  else:
+                      print(f"⚠️ 账号 {account_index} (UID {uid}) 未知响应：code={code}, msg={msg}")
+              except Exception as e:
+                  print(f"❌ 账号 {account_index} 请求异常：{str(e)}")
+
+          # 遍历所有账号，间隔2秒防风控
+          for idx, cookie in enumerate(cookies_list, 1):
+              print(f"===== 账号 {idx} =====")
+              sign_in(cookie, idx)
+              time.sleep(2)
+
+          print("\n🎉 所有签到流程结束")
+          EOF
