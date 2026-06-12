@@ -3,16 +3,15 @@ name: 原神自动签到
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 16 * * *'  # 北京时间 00:00 执行
+    - cron: '0 16 * * *'
 
 jobs:
   checkin:
     runs-on: ubuntu-latest
     steps:
-      - name: 检出仓库代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: 配置 Python 3.10
+      - name: 配置 Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
@@ -20,83 +19,83 @@ jobs:
       - name: 安装依赖
         run: pip install requests -q
 
-      - name: 执行多账号签到
+      - name: 执行签到
         env:
           MIHOYO_COOKIE: ${{ secrets.MIHOYO_COOKIE }}
         shell: bash
         run: |
           python - << 'EOF'
-          import os, sys, re, time, random, hashlib, requests, uuid
+          import os
+          import sys
+          import time
+          import requests
+          import uuid
+
+          # 关闭警告
           requests.packages.urllib3.disable_warnings()
 
-          COOKIE_ENV = os.environ.get("MIHOYO_COOKIE")
-          if not COOKIE_ENV:
-              print("❌ 未配置 MIHOYO_COOKIE")
+          # 读取Cookie
+          cookie = os.getenv("MIHOYO_COOKIE")
+          if not cookie:
+              print("❌ 未配置Cookie")
               sys.exit(1)
 
-          cookies_list = [c.strip() for c in COOKIE_ENV.strip().splitlines() if c.strip()]
-          print(f"📋 共检测到 {len(cookies_list)} 个账号\n")
+          # 通用配置
+          headers = {
+              "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) miHoYoBBS/2.70.2",
+              "Cookie": cookie,
+              "x-rpc-device_id": str(uuid.uuid4()),
+              "x-rpc-app_version": "2.70.2",
+              "x-rpc-client_type": "2",
+              "Referer": "https://webstatic.mihoyo.com/"
+          }
 
-          # 原神签到接口配置（修复版）
-          ACT_ID = "e202102251931481"
-          SALT = "t0qEgfub6cvueAPgR5m9aQWWVciEer7v"  # 新版盐值
+          # 获取角色信息（自动识别服务器+UID）
+          def get_roles():
+              url = "https://api-takumi.mihoyo.com/binding/api/getUserGameRolesByCookie?game_biz=hk4e_cn"
+              res = requests.get(url, headers=headers, verify=False, timeout=10)
+              data = res.json()
+              if data.get("retcode") != 0:
+                  print("❌ 获取角色失败：", data.get("message"))
+                  return None
+              return data["data"]["list"]
 
-          def get_ds():
-              t = int(time.time())
-              r = ''.join(random.choices("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", k=6))
-              sign_content = f"salt={SALT}&t={t}&r={r}&b={{}}&q="
-              sign = hashlib.md5(sign_content.encode()).hexdigest()
-              return f"{t},{r},{sign}"
-
-          def sign_in(cookie, account_index):
-              ltuid_match = re.search(r'ltuid(_v2)?=(\d+)', cookie)
-              if not ltuid_match:
-                  print(f"❌ 账号 {account_index} Cookie 缺少 ltuid，跳过")
-                  return
-              uid = ltuid_match.group(2)
-
-              device_id = str(uuid.uuid4())
-              headers = {
-                  "Cookie": cookie,
-                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-                  "x-rpc-app_version": "2.44.1",
-                  "x-rpc-client_type": "5",
-                  "x-rpc-sys_version": "Windows 10",
-                  "x-rpc-device_id": device_id,
-                  "x-rpc-signgame": "hk4e",
-                  "x-rpc-sign": get_ds(),
-                  "Referer": "https://webstatic.mihoyo.com/bbs/event/signin-ys/index.html?bbs_auth_required=true&act_id=e202102251931481&biz=bbs&pid=ys",
-                  "Origin": "https://webstatic.mihoyo.com",
-                  "Content-Type": "application/json",
-                  "Accept": "application/json, text/plain, */*",
-                  "x-rpc-platform": "pc",
-                  "x-rpc-biz-code": "hk4e"
+          # 米游社每日签到（官方永久接口）
+          def sign(region, uid):
+              url = "https://api-takumi.mihoyo.com/event/bbs_sign_reward/sign"
+              json_data = {
+                  "act_id": "e202009291139501",
+                  "region": region,
+                  "uid": uid
               }
+              res = requests.post(url, headers=headers, json=json_data, verify=False, timeout=10)
+              return res.json()
 
-              url = "https://api-takumi.mihoyo.com/event/luna/sign"
-              data = {"act_id": ACT_ID, "lang": "zh-cn", "region": "cn_gf01", "uid": uid}
+          # 主逻辑
+          if __name__ == "__main__":
+              roles = get_roles()
+              if not roles:
+                  sys.exit(1)
 
-              try:
-                  resp = requests.post(url, headers=headers, json=data, timeout=10, verify=False)
-                  result = resp.json()
-                  code = result.get("retcode")
-                  msg = result.get("message", "")
+              for item in roles:
+                  uid = item["game_uid"]
+                  region = item["region"]
+                  nickname = item["nickname"]
+
+                  print(f"🎮 账号：{nickname} | UID：{uid}")
+                  res = sign(region, uid)
+                  code = res.get("retcode")
 
                   if code == 0:
-                      print(f"✅ 账号 {account_index} (UID {uid}) 签到成功：{msg}")
+                      print(f"✅ 签到成功！")
                   elif code == -5003:
-                      print(f"ℹ️ 账号 {account_index} (UID {uid}) 今日已签到过")
+                      print(f"ℹ️ 今日已签到")
                   elif code == -100:
-                      print(f"❌ 账号 {account_index} (UID {uid}) Cookie 已失效，请重新获取")
+                      print(f"❌ Cookie已失效")
                   else:
-                      print(f"⚠️ 账号 {account_index} (UID {uid}) 未知响应：code={code}, msg={msg}")
-              except Exception as e:
-                  print(f"❌ 账号 {account_index} 请求异常：{str(e)}")
+                      print(f"⚠️ 失败：{res.get('message')}")
+                  print("-" * 30)
+                  time.sleep(2)
 
-          for idx, cookie in enumerate(cookies_list, 1):
-              print(f"===== 账号 {idx} =====")
-              sign_in(cookie, idx)
-              time.sleep(2)
-
-          print("\n🎉 所有签到流程结束")
+          print("🎉 全部执行完成")
           EOF
