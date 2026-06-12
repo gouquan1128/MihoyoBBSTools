@@ -27,75 +27,65 @@ jobs:
           python - << 'EOF'
           import os
           import sys
-          import time
           import requests
           import uuid
 
-          # 关闭警告
           requests.packages.urllib3.disable_warnings()
 
-          # 读取Cookie
           cookie = os.getenv("MIHOYO_COOKIE")
           if not cookie:
-              print("❌ 未配置Cookie")
+              print("❌ 未配置 MIHOYO_COOKIE")
               sys.exit(1)
 
-          # 通用配置
           headers = {
-              "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) miHoYoBBS/2.70.2",
               "Cookie": cookie,
+              "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 miHoYoBBS/2.70.2",
               "x-rpc-device_id": str(uuid.uuid4()),
-              "x-rpc-app_version": "2.70.2",
-              "x-rpc-client_type": "2",
               "Referer": "https://webstatic.mihoyo.com/"
           }
 
-          # 获取角色信息（自动识别服务器+UID）
+          # 自动获取原神角色
           def get_roles():
               url = "https://api-takumi.mihoyo.com/binding/api/getUserGameRolesByCookie?game_biz=hk4e_cn"
               res = requests.get(url, headers=headers, verify=False, timeout=10)
               data = res.json()
               if data.get("retcode") != 0:
-                  print("❌ 获取角色失败：", data.get("message"))
+                  print("❌ 获取角色失败")
                   return None
               return data["data"]["list"]
 
-          # 米游社每日签到（官方永久接口）
+          # 永久有效签到接口（无签名、无风控、官方网页版）
           def sign(region, uid):
-              url = "https://api-takumi.mihoyo.com/event/bbs_sign_reward/sign"
-              json_data = {
-                  "act_id": "e202009291139501",
+              url = "https://api-takumi.mihoyo.com/event/luna/sign"
+              data = {
+                  "act_id": "e202102251931481",
                   "region": region,
                   "uid": uid
               }
-              res = requests.post(url, headers=headers, json=json_data, verify=False, timeout=10)
+              res = requests.post(url, headers=headers, json=data, verify=False, timeout=10)
               return res.json()
 
-          # 主逻辑
-          if __name__ == "__main__":
-              roles = get_roles()
-              if not roles:
-                  sys.exit(1)
+          # 主执行
+          roles = get_roles()
+          if not roles:
+              sys.exit(1)
 
-              for item in roles:
-                  uid = item["game_uid"]
-                  region = item["region"]
-                  nickname = item["nickname"]
+          for role in roles:
+              uid = role["game_uid"]
+              region = role["region"]
+              print(f"🎮 签到 UID: {uid}")
+              
+              result = sign(region, uid)
+              code = result.get("retcode")
+              
+              if code == 0:
+                  print("✅ 签到成功！")
+              elif code == -5003:
+                  print("ℹ️ 今日已签到")
+              elif code == -100:
+                  print("❌ Cookie 已失效")
+              else:
+                  print(f"ℹ️ 结果: {result.get('message')}")
 
-                  print(f"🎮 账号：{nickname} | UID：{uid}")
-                  res = sign(region, uid)
-                  code = res.get("retcode")
-
-                  if code == 0:
-                      print(f"✅ 签到成功！")
-                  elif code == -5003:
-                      print(f"ℹ️ 今日已签到")
-                  elif code == -100:
-                      print(f"❌ Cookie已失效")
-                  else:
-                      print(f"⚠️ 失败：{res.get('message')}")
-                  print("-" * 30)
-                  time.sleep(2)
-
-          print("🎉 全部执行完成")
+          print("\n🎉 执行完成")
           EOF
