@@ -2,7 +2,7 @@ name: 原神自动签到
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 16 * * *'
+    - cron: '0 12 * * *'  # UTC 12:00 = 北京时间 20:00
 
 jobs:
   checkin:
@@ -26,9 +26,11 @@ jobs:
 
           cookie = os.getenv("MIHOYO_COOKIE")
           if not cookie:
+              print("Cookie 未配置")
               sys.exit(1)
 
-          ACT_ID = "e202102251931481"
+          # ⚠️ 请抓包替换为当前有效的 act_id
+          ACT_ID = "e202502251438471"  # 示例，请替换
           SIGN_URL = "https://api-takumi.mihoyo.com/event/luna/sign"
           ROLE_URL = "https://api-takumi.mihoyo.com/binding/api/getUserGameRolesByCookie?game_biz=hk4e_cn"
           SALT = "t0qEgfub6cvueAPgR5m9aQWWVciEer7v"
@@ -36,14 +38,15 @@ jobs:
           def get_ds():
               t = int(time.time())
               r = ''.join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=6))
-              return f"{t},{r},{hashlib.md5(f'salt={SALT}&t={t}&r={r}'.encode()).hexdigest()}"
+              m = hashlib.md5(f"salt={SALT}&t={t}&r={r}".encode()).hexdigest()
+              return f"{t},{r},{m}"
 
-          def get_headers():
+          def gen_headers():
               return {
                   "Cookie": cookie,
                   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/135.0.0.0 Safari/537.36",
-                  "Referer": f"https://webstatic.mihoyo.com/bbs/event/signin-ys/index.html?act_id={ACT_ID}",
-                  "Origin": "https://webstatic.mihoyo.com",
+                  "Referer": f"https://act.mihoyo.com/bbs/event/signin/hk4e/index.html?act_id={ACT_ID}",
+                  "Origin": "https://act.mihoyo.com",
                   "x-rpc-app_version": "2.73.1",
                   "x-rpc-client_type": "5",
                   "x-rpc-signgame": "hk4e",
@@ -52,13 +55,37 @@ jobs:
                   "Content-Type": "application/json"
               }
 
-          roles = requests.get(ROLE_URL, headers=get_headers(), verify=False, timeout=10).json()
+          # 获取角色列表
+          rsp = requests.get(ROLE_URL, headers=gen_headers(), verify=False, timeout=10)
+          roles = rsp.json()
           if roles.get("retcode") != 0:
+              print("获取角色失败：", roles)
               sys.exit(1)
 
+          results = []
           for role in roles["data"]["list"]:
-              payload = {"act_id": ACT_ID, "lang": "zh-cn", "region": role["region"], "uid": role["game_uid"]}
-              res = requests.post(SIGN_URL, headers=get_headers(), json=payload, verify=False, timeout=10).json()
-              print(res)
-              time.sleep(2)
+              uid = role["game_uid"]
+              region = role["region"]
+              payload = {"act_id": ACT_ID, "lang": "zh-cn", "region": region, "uid": uid}
+              success = False
+              for attempt in range(3):
+                  try:
+                      res = requests.post(SIGN_URL, headers=gen_headers(), json=payload, verify=False, timeout=10).json()
+                      if res.get("retcode") == 0:
+                          success = True
+                          print(f"UID {uid} 签到成功 ✅")
+                          break
+                      elif res.get("retcode") == -5003:
+                          print(f"UID {uid} 今天已签到")
+                          success = True
+                          break
+                      else:
+                          print(f"UID {uid} 签到失败 (尝试 {attempt+1}/3): {res}")
+                          time.sleep(2)
+                  except Exception as e:
+                      print(f"UID {uid} 网络异常: {e}")
+                      time.sleep(3)
+              if not success:
+                  print(f"UID {uid} 最终签到失败 ❌")
+              time.sleep(1)
           EOF
