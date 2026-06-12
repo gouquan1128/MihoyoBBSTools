@@ -1,49 +1,102 @@
-# 原神签到接口配置（修复版）
-ACT_ID = "e202102251931481"
-SALT = "t0qEgfub6cvueAPgR5m9aQWWVciEer7v"  # 新版盐值
+name: 原神自动签到
 
-def sign_in(cookie, account_index):
-    ltuid_match = re.search(r'ltuid(_v2)?=(\d+)', cookie)
-    if not ltuid_match:
-        print(f"❌ 账号 {account_index} Cookie 缺少 ltuid，跳过")
-        return
-    uid = ltuid_match.group(2)
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 16 * * *'  # 北京时间 00:00 执行
 
-    device_id = str(uuid.uuid4())
-    headers = {
-        "Cookie": cookie,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
-        "x-rpc-app_version": "2.44.1",  # 更新为最新版本
-        "x-rpc-client_type": "5",
-        "x-rpc-sys_version": "Windows 10",
-        "x-rpc-device_id": device_id,
-        "x-rpc-signgame": "hk4e",
-        "x-rpc-sign": get_ds(),
-        "Referer": "https://webstatic.mihoyo.com/bbs/event/signin-ys/index.html?bbs_auth_required=true&act_id=e202102251931481&biz=bbs&pid=ys",
-        "Origin": "https://webstatic.mihoyo.com",
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/plain, */*",
-        "x-rpc-platform": "pc",
-        "x-rpc-biz-code": "hk4e"
-    }
+jobs:
+  checkin:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出仓库代码
+        uses: actions/checkout@v4
 
-    # 替换为最新接口URL
-    url = "https://api-takumi.mihoyo.com/event/luna/sign"
-    data = {"act_id": ACT_ID, "lang": "zh-cn", "region": "cn_gf01", "uid": uid}
+      - name: 配置 Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
 
-    try:
-        resp = requests.post(url, headers=headers, json=data, timeout=10, verify=False)
-        result = resp.json()
-        code = result.get("retcode")
-        msg = result.get("message", "")
+      - name: 安装依赖
+        run: pip install requests -q
 
-        if code == 0:
-            print(f"✅ 账号 {account_index} (UID {uid}) 签到成功：{msg}")
-        elif code == -5003:
-            print(f"ℹ️ 账号 {account_index} (UID {uid}) 今日已签到过")
-        elif code == -100:
-            print(f"❌ 账号 {account_index} (UID {uid}) Cookie 已失效，请重新获取")
-        else:
-            print(f"⚠️ 账号 {account_index} (UID {uid}) 未知响应：code={code}, msg={msg}")
-    except Exception as e:
-        print(f"❌ 账号 {account_index} 请求异常：{str(e)}")
+      - name: 执行多账号签到
+        env:
+          MIHOYO_COOKIE: ${{ secrets.MIHOYO_COOKIE }}
+        shell: bash
+        run: |
+          python - << 'EOF'
+          import os, sys, re, time, random, hashlib, requests, uuid
+          requests.packages.urllib3.disable_warnings()
+
+          COOKIE_ENV = os.environ.get("MIHOYO_COOKIE")
+          if not COOKIE_ENV:
+              print("❌ 未配置 MIHOYO_COOKIE")
+              sys.exit(1)
+
+          cookies_list = [c.strip() for c in COOKIE_ENV.strip().splitlines() if c.strip()]
+          print(f"📋 共检测到 {len(cookies_list)} 个账号\n")
+
+          # 原神签到接口配置（修复版）
+          ACT_ID = "e202102251931481"
+          SALT = "t0qEgfub6cvueAPgR5m9aQWWVciEer7v"  # 新版盐值
+
+          def get_ds():
+              t = int(time.time())
+              r = ''.join(random.choices("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", k=6))
+              sign_content = f"salt={SALT}&t={t}&r={r}&b={{}}&q="
+              sign = hashlib.md5(sign_content.encode()).hexdigest()
+              return f"{t},{r},{sign}"
+
+          def sign_in(cookie, account_index):
+              ltuid_match = re.search(r'ltuid(_v2)?=(\d+)', cookie)
+              if not ltuid_match:
+                  print(f"❌ 账号 {account_index} Cookie 缺少 ltuid，跳过")
+                  return
+              uid = ltuid_match.group(2)
+
+              device_id = str(uuid.uuid4())
+              headers = {
+                  "Cookie": cookie,
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36",
+                  "x-rpc-app_version": "2.44.1",
+                  "x-rpc-client_type": "5",
+                  "x-rpc-sys_version": "Windows 10",
+                  "x-rpc-device_id": device_id,
+                  "x-rpc-signgame": "hk4e",
+                  "x-rpc-sign": get_ds(),
+                  "Referer": "https://webstatic.mihoyo.com/bbs/event/signin-ys/index.html?bbs_auth_required=true&act_id=e202102251931481&biz=bbs&pid=ys",
+                  "Origin": "https://webstatic.mihoyo.com",
+                  "Content-Type": "application/json",
+                  "Accept": "application/json, text/plain, */*",
+                  "x-rpc-platform": "pc",
+                  "x-rpc-biz-code": "hk4e"
+              }
+
+              url = "https://api-takumi.mihoyo.com/event/luna/sign"
+              data = {"act_id": ACT_ID, "lang": "zh-cn", "region": "cn_gf01", "uid": uid}
+
+              try:
+                  resp = requests.post(url, headers=headers, json=data, timeout=10, verify=False)
+                  result = resp.json()
+                  code = result.get("retcode")
+                  msg = result.get("message", "")
+
+                  if code == 0:
+                      print(f"✅ 账号 {account_index} (UID {uid}) 签到成功：{msg}")
+                  elif code == -5003:
+                      print(f"ℹ️ 账号 {account_index} (UID {uid}) 今日已签到过")
+                  elif code == -100:
+                      print(f"❌ 账号 {account_index} (UID {uid}) Cookie 已失效，请重新获取")
+                  else:
+                      print(f"⚠️ 账号 {account_index} (UID {uid}) 未知响应：code={code}, msg={msg}")
+              except Exception as e:
+                  print(f"❌ 账号 {account_index} 请求异常：{str(e)}")
+
+          for idx, cookie in enumerate(cookies_list, 1):
+              print(f"===== 账号 {idx} =====")
+              sign_in(cookie, idx)
+              time.sleep(2)
+
+          print("\n🎉 所有签到流程结束")
+          EOF
