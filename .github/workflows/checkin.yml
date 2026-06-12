@@ -1,151 +1,64 @@
-name: 原神米游社自动签到（全新重写）
+name: 原神自动签到
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 16 * * *'  # 北京时间 00:00 自动执行
+    - cron: '0 16 * * *'
 
 jobs:
-  genshin_sign:
+  checkin:
     runs-on: ubuntu-latest
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v4
-
-      - name: 配置 Python 环境
+      - uses: actions/checkout@v4
+      - name: 配置 Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-
+          python-version: "3.10"
       - name: 安装依赖
-        run: pip install requests -q
-
-      - name: 执行签到脚本
+        run: pip install requests
+      - name: 执行签到
         env:
           MIHOYO_COOKIE: ${{ secrets.MIHOYO_COOKIE }}
+        shell: bash
         run: |
           python - << 'EOF'
-          import os
-          import sys
-          import time
-          import random
-          import hashlib
-          import requests
-          import uuid
-
-          # 关闭 SSL 警告
+          import os, sys, time, random, hashlib, requests, uuid
           requests.packages.urllib3.disable_warnings()
 
-          # 读取 Cookie
-          cookie = os.environ.get("MIHOYO_COOKIE")
+          cookie = os.getenv("MIHOYO_COOKIE")
           if not cookie:
-              print("❌ 错误：未配置 MIHOYO_COOKIE 环境变量")
               sys.exit(1)
 
-          # ====================== 核心配置（全新验证）======================
-          # 米游社原神签到活动配置（2026 有效）
           ACT_ID = "e202102251931481"
-          API_HOST = "api-takumi.mihoyo.com"
-          SIGN_URL = f"https://{API_HOST}/event/luna/sign"
+          SIGN_URL = "https://api-takumi.mihoyo.com/event/luna/sign"
           ROLE_URL = "https://api-takumi.mihoyo.com/binding/api/getUserGameRolesByCookie?game_biz=hk4e_cn"
-
-          # DS 签名配置（最新盐值，兼容 v2 Cookie）
           SALT = "t0qEgfub6cvueAPgR5m9aQWWVciEer7v"
 
-          def generate_ds():
-              """生成米哈游接口需要的 DS 签名"""
+          def get_ds():
               t = int(time.time())
-              r = ''.join(random.choices("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", k=6))
-              sign = hashlib.md5(f"salt={SALT}&t={t}&r={r}".encode()).hexdigest()
-              return f"{t},{r},{sign}"
+              r = ''.join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=6))
+              return f"{t},{r},{hashlib.md5(f'salt={SALT}&t={t}&r={r}'.encode()).hexdigest()}"
 
-          # ====================== 请求头配置（全新伪装）======================
           def get_headers():
-              """生成标准请求头"""
               return {
                   "Cookie": cookie,
-                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
-                  "Referer": "https://webstatic.mihoyo.com/bbs/event/signin-ys/index.html?act_id=" + ACT_ID,
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/135.0.0.0 Safari/537.36",
+                  "Referer": f"https://webstatic.mihoyo.com/bbs/event/signin-ys/index.html?act_id={ACT_ID}",
                   "Origin": "https://webstatic.mihoyo.com",
-                  "x-rpc-app_version": "2.72.1",
+                  "x-rpc-app_version": "2.73.1",
                   "x-rpc-client_type": "5",
                   "x-rpc-signgame": "hk4e",
                   "x-rpc-device_id": str(uuid.uuid4()),
-                  "x-rpc-sign": generate_ds(),
-                  "Accept": "application/json, text/plain, */*",
+                  "x-rpc-sign": get_ds(),
                   "Content-Type": "application/json"
               }
 
-          # ====================== 功能函数 ======================
-          def get_genshin_roles():
-              """获取用户绑定的原神角色信息"""
-              try:
-                  resp = requests.get(ROLE_URL, headers=get_headers(), verify=False, timeout=15)
-                  resp.raise_for_status()
-                  data = resp.json()
-                  if data.get("retcode") != 0:
-                      print(f"❌ 获取角色失败：{data.get('message')}")
-                      return None
-                  return data["data"]["list"]
-              except Exception as e:
-                  print(f"❌ 获取角色请求异常：{str(e)}")
-                  return None
+          roles = requests.get(ROLE_URL, headers=get_headers(), verify=False, timeout=10).json()
+          if roles.get("retcode") != 0:
+              sys.exit(1)
 
-          def do_sign(region, uid):
-              """执行签到请求"""
-              payload = {
-                  "act_id": ACT_ID,
-                  "lang": "zh-cn",
-                  "region": region,
-                  "uid": uid
-              }
-              try:
-                  resp = requests.post(SIGN_URL, headers=get_headers(), json=payload, verify=False, timeout=15)
-                  resp.raise_for_status()
-                  return resp.json()
-              except Exception as e:
-                  print(f"❌ 签到请求异常：{str(e)}")
-                  return None
-
-          # ====================== 主逻辑 ======================
-          if __name__ == "__main__":
-              print("===== 原神米游社自动签到 启动 =====")
-
-              # 1. 获取角色信息
-              roles = get_genshin_roles()
-              if not roles:
-                  print("❌ 未找到绑定的原神角色，请检查 Cookie 是否有效")
-                  sys.exit(1)
-
-              print(f"✅ 共获取到 {len(roles)} 个原神角色")
-
-              # 2. 遍历角色执行签到
-              for idx, role in enumerate(roles, 1):
-                  game_uid = role["game_uid"]
-                  region = role["region"]
-                  nickname = role["nickname"]
-                  print(f"\n🎮 角色 {idx}：{nickname} (UID: {game_uid})")
-
-                  result = do_sign(region, game_uid)
-                  if not result:
-                      continue
-
-                  retcode = result.get("retcode")
-                  message = result.get("message", "无提示信息")
-
-                  if retcode == 0:
-                      print(f"✅ 签到成功！奖励已发放")
-                  elif retcode == -5003:
-                      print(f"ℹ️ 今日已签到，无需重复操作")
-                  elif retcode == -100:
-                      print(f"❌ Cookie 已失效，请重新获取")
-                  elif retcode == -500012:
-                      print(f"❌ 活动已结束（错误码：-500012），请检查脚本接口配置")
-                  else:
-                      print(f"⚠️ 未知响应：retcode={retcode}, message={message}")
-
-                  # 账号间延迟，避免风控
-                  if idx < len(roles):
-                      time.sleep(3)
-
-              print("\n===== 签到流程全部完成 =====")
+          for role in roles["data"]["list"]:
+              payload = {"act_id": ACT_ID, "lang": "zh-cn", "region": role["region"], "uid": role["game_uid"]}
+              res = requests.post(SIGN_URL, headers=get_headers(), json=payload, verify=False, timeout=10).json()
+              print(res)
+              time.sleep(2)
           EOF
