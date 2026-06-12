@@ -1,0 +1,26 @@
+name: Daily Sign In
+
+on:
+  schedule:
+    - cron: '30 1 * * *'   # 北京时间上午9:30自动触发
+  workflow_dispatch:       # 允许手动触发
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+    - name: Create config file
+      run: |
+        mkdir -p config
+        cp config/config.yaml.example config/config.yaml
+        # 这里需要用 sed 命令修改配置文件
+        # 将 stuid 和 stoken 替换为从 Secrets 读取的变量
+    - name: Run sign in script
+      run: python main_multi.py
